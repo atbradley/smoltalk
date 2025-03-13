@@ -1,0 +1,11 @@
+[project]
+name = "smalltalk"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "httpx>=0.28.1",
+    "numpydoc>=1.8.0",
+    "sanic>=24.12.0",
+]
