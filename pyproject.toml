@@ -1,11 +1,13 @@
 [project]
-name = "smalltalk"
+name = "smoltalk"
 version = "0.1.0"
-description = "Add your description here"
+authors = [
+    { name="Adam Bradley", email="hisself@adambradley.net" }
+]
+description = "A small, simple microframework for creating agentic AI applications."
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "httpx>=0.28.1",
     "numpydoc>=1.8.0",
-    "sanic>=24.12.0",
 ]
