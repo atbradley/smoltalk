@@ -1,3 +1,4 @@
-# Smalltalk
+# Smoltalk
 
-Smalltalk is a small, simple "microframework" for creating agentic AI applications.
+Smoltalk is a small, simple "microframework" for creating agentic AI applications.
+👤
