@@ -41,7 +41,7 @@ class Toolbox():
             "tool_choice": "auto",
             "n": 1,
         }
-        logger.debug('request_body', json.dumps(request_body))
+        logger.debug('request_body: %s' % (json.dumps(request_body),))
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 f"{self.root_url}chat/completions",
