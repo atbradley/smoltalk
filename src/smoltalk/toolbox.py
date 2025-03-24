@@ -51,7 +51,6 @@ class Toolbox():
                 timeout=15,
             )
         response = response.json()
-        print(response)
         logger.debug("Response from model: %s" % (str(response),))
         messages.append(response['choices'][0]['message'])
         
@@ -60,9 +59,9 @@ class Toolbox():
             for tool_call in response['choices'][0]['message'].get('tool_calls'):
                 try:
                     response = await self._call_tool(tool_call)
-                    logger.debug("tool response:", response)
-                    if fail_on_tool_error and response.get('error'):
-                        logger.warning("Tool call failed with error: %s" % (response['error'],))
+                    logger.debug("tool response: %s" (str(response),))
+                    if fail_on_tool_error and error := response.get('error'):
+                        logger.warning("Tool call failed with error: %s" % (error,))
                         return response
                 #TODO: provide a more specific exception for tools to throw.
                 except Exception as e:
