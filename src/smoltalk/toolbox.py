@@ -4,9 +4,8 @@ import logging
 from typing import Type, Union
 import os.path
 import httpx
-
+import time
 logger = logging.getLogger(__name__)
-
 
 class Toolbox():
     def __init__(
@@ -42,48 +41,60 @@ class Toolbox():
             "n": 1,
         }
         logger.debug('request_body: %s' % (json.dumps(request_body),))
+        start_time = time.perf_counter()
         async with httpx.AsyncClient() as client:
-            response = await client.post(
+            resp = await client.post(
                 f"{self.root_url}chat/completions",
                 headers={"Authorization": f"Bearer {self.api_key}"},
                 json=request_body,
                 follow_redirects=True,
-                timeout=15,
+                timeout=45,
             )
-        response = response.json()
+        end_time = time.perf_counter()
+        completed_time = time.ctime(end_time)
+        logger.info("Received response from %s at %s (after %6f seconds)" % (self.model, completed_time, end_time - start_time,))
+        logger.debug("Response from model: %s" % str(resp.json()))
+        resp.raise_for_status()
+        response = resp.json()
         logger.debug("Response from model: %s" % (str(response),))
         messages.append(response['choices'][0]['message'])
         
         if auto_tool_call and response['choices'][0]['message'].get('tool_calls', []):
             # TODO: this should be async and call the tools in parallel.
             for tool_call in response['choices'][0]['message'].get('tool_calls'):
+                logger.debug("tool call: %s" % str(response))
                 try:
                     response = await self._call_tool(tool_call)
-                    logger.debug("tool response: %s" (str(response),))
-                    if fail_on_tool_error and response.get('error'):
-                        logger.warning("Tool call failed with error: %s" % (response.get('error'),))
+                    logger.debug("tool response: %s" % str(response))
+                    if fail_on_tool_error and (type(response) == dict and response.get('error')):
+                        logger.warning("Tool call failed with error: %s" % response.get('error'))
                         return response
                 #TODO: provide a more specific exception for tools to throw.
                 except Exception as e:
-                    logger.warning("Tool call failed with exception: %s" % (str(e),))
-                    response = {"error": "Tool call failed with exception: %s" % (str(e),)}
+                    logger.warning("Tool call failed with exception: %s" % str(e))
+                    response = {"error": "Tool call failed with exception: %s" % str(e)}
                     if fail_on_tool_error:
                         return response
-                messages.append({"role": "tool", "content": json.dumps(response), "tool_call_id": tool_call['id']})
+                messages.append({"role": "tool", "content": json.dumps(response), "tool_call_id": tool_call['id'], "name": tool_call['function']['name']})
                 response = await self.get_response(messages)
 
         return response
 
     async def _call_tool(self, tool_call):
+        start_time = time.perf_counter()
         logger.debug("_call_tool: %s" % (tool_call,))
         tool_name = tool_call['function']['name']
         tool_args = json.loads(tool_call['function']['arguments'])
         logger.debug("Calling tool '%s' with parameters '%s'" % (tool_name, tool_args))
         tool = getattr(self.tools, tool_name)
         if inspect.iscoroutinefunction(tool):
-            return await tool(**tool_args)
+            outp = await tool(**tool_args)
         else:
-            return tool(**tool_args)
+            outp = tool(**tool_args)
+        end_time = time.perf_counter()
+        completed_time = time.ctime(end_time)
+        logger.info("Tool %s returned at %s (after %6f seconds)" % (self.model, completed_time, end_time - start_time,))
+        return outp
 
     def _generate_tool_signatures(self):
         """
@@ -180,7 +191,8 @@ def function_to_dict(input_function):  # noqa: C901
                         # may represent a set of acceptable values
                         # translating as enum for function calling
                         try:
-                            param_enum = str(list(literal_eval(param_type)))
+                            # Vertex AI complained when this was a string.
+                            param_enum = list(literal_eval(param_type))
                             param_type = "string"
                         except Exception:
                             pass
@@ -200,7 +212,7 @@ def function_to_dict(input_function):  # noqa: C901
         # Check if the parameter has no default value (i.e., it's required)
         if param.default == param.empty:
             required_params.append(param_name)
-
+        
     # Create the dictionary
     result = {
         "type": "function", 
