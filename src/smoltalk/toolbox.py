@@ -5,12 +5,19 @@ from typing import Type, Union
 import os.path
 import httpx
 import time
+
 logger = logging.getLogger(__name__)
 
-class Toolbox():
+
+class Toolbox:
     def __init__(
-        self, tools: Union[Type[object], object], root_url: str, model: str, api_key: str='no-key-needed', 
-        system_prompt: str = None, fail_on_tool_error: bool = False
+        self,
+        tools: Union[Type[object], object],
+        root_url: str,
+        model: str,
+        api_key: str = "no-key-needed",
+        system_prompt: str = None,
+        fail_on_tool_error: bool = False,
     ):
         self.tools = tools
         self.root_url = root_url
@@ -20,27 +27,40 @@ class Toolbox():
 
         here = os.path.dirname(__file__)
 
-        if not system_prompt:            
+        if not system_prompt:
             logger.warning("No system prompt provided. Was this deliberate?")
 
         self.system_prompt = system_prompt
 
         self.tool_signatures = self._generate_tool_signatures()
 
-    async def get_response(self, messages, auto_tool_call=True, fail_on_tool_error=None):
+    async def get_response(
+        self, messages, auto_tool_call=True, fail_on_tool_error=None
+    ):
         if fail_on_tool_error is None:
             fail_on_tool_error = self.fail_on_tool_error
-        if self.system_prompt:        
+
+        for n in range(len(messages)):
+            if messages[n]["role"] in [
+                "system",
+                "developer",
+            ]:  # OpenAI calls this role "developer" now.
+                messages.pop(n)
+                break
+
+        if self.system_prompt:
             messages.insert(0, {"role": "system", "content": self.system_prompt})
         logger.debug("Getting a response from the model at %s" % (self.root_url,))
         request_body = {
             "model": self.model,
             "messages": messages,
-            "tools": self.tool_signatures,
-            "tool_choice": "auto",
             "n": 1,
         }
-        logger.debug('request_body: %s' % (json.dumps(request_body),))
+        if messages[-1]["role"] != "tool":
+            request_body["tools"] = self.tool_signatures
+            request_body["tool_choice"] = "auto"
+
+        logger.debug("request_body: %s" % (json.dumps(request_body),))
         start_time = time.perf_counter()
         async with httpx.AsyncClient() as client:
             resp = await client.post(
@@ -52,30 +72,49 @@ class Toolbox():
             )
         end_time = time.perf_counter()
         completed_time = time.ctime(end_time)
-        logger.info("Received response from %s at %s (after %6f seconds)" % (self.model, completed_time, end_time - start_time,))
-        logger.debug("Response from model: %s" % str(resp.json()))
+        logger.info(
+            "Received response from %s at %s (after %6f seconds)"
+            % (
+                self.model,
+                completed_time,
+                end_time - start_time,
+            )
+        )
+        logger.debug("Response from model: %s" % str(json.dumps(resp.json())))
         resp.raise_for_status()
         response = resp.json()
-        logger.debug("Response from model: %s" % (str(response),))
-        messages.append(response['choices'][0]['message'])
-        
-        if auto_tool_call and response['choices'][0]['message'].get('tool_calls', []):
+        if "function_call" in response["choices"][0]["message"]:
+            del(response["choices"][0]["message"]["function_call"]) #Mistral doesn't want this.
+        messages.append(response["choices"][0]["message"])
+
+        if auto_tool_call and response["choices"][0]["message"].get("tool_calls", []):
             # TODO: this should be async and call the tools in parallel.
-            for tool_call in response['choices'][0]['message'].get('tool_calls'):
+            for tool_call in response["choices"][0]["message"].get("tool_calls"):
                 logger.debug("tool call: %s" % str(response))
                 try:
                     response = await self._call_tool(tool_call)
                     logger.debug("tool response: %s" % str(response))
-                    if fail_on_tool_error and (type(response) == dict and response.get('error')):
-                        logger.warning("Tool call failed with error: %s" % response.get('error'))
+                    if fail_on_tool_error and (
+                        type(response) == dict and response.get("error")
+                    ):
+                        logger.warning(
+                            "Tool call failed with error: %s" % response.get("error")
+                        )
                         return response
-                #TODO: provide a more specific exception for tools to throw.
+                # TODO: provide a more specific exception for tools to throw.
                 except Exception as e:
                     logger.warning("Tool call failed with exception: %s" % str(e))
                     response = {"error": "Tool call failed with exception: %s" % str(e)}
                     if fail_on_tool_error:
                         return response
-                messages.append({"role": "tool", "content": json.dumps(response), "tool_call_id": tool_call['id'], "name": tool_call['function']['name']})
+                messages.append(
+                    {
+                        "role": "tool",
+                        "content": json.dumps(response),
+                        "tool_call_id": tool_call["id"],
+                        "name": tool_call["function"]["name"],
+                    }
+                )
                 response = await self.get_response(messages)
 
         return response
@@ -83,8 +122,8 @@ class Toolbox():
     async def _call_tool(self, tool_call):
         start_time = time.perf_counter()
         logger.debug("_call_tool: %s" % (tool_call,))
-        tool_name = tool_call['function']['name']
-        tool_args = json.loads(tool_call['function']['arguments'])
+        tool_name = tool_call["function"]["name"]
+        tool_args = json.loads(tool_call["function"]["arguments"])
         logger.debug("Calling tool '%s' with parameters '%s'" % (tool_name, tool_args))
         tool = getattr(self.tools, tool_name)
         if inspect.iscoroutinefunction(tool):
@@ -93,7 +132,14 @@ class Toolbox():
             outp = tool(**tool_args)
         end_time = time.perf_counter()
         completed_time = time.ctime(end_time)
-        logger.info("Tool %s returned at %s (after %6f seconds)" % (self.model, completed_time, end_time - start_time,))
+        logger.info(
+            "Tool %s returned at %s (after %6f seconds)"
+            % (
+                self.model,
+                completed_time,
+                end_time - start_time,
+            )
+        )
         return outp
 
     def _generate_tool_signatures(self):
@@ -104,12 +150,13 @@ class Toolbox():
         logger.debug("Generating tool signatures.")
         tools = [
             function_to_dict(func)
-            for name, func in inspect.getmembers(
-                self.tools, inspect.isfunction
-            )
-            if not name.startswith("_") #Better way to do this? Nested class, decorator?
+            for name, func in inspect.getmembers(self.tools, inspect.isfunction)
+            if not name.startswith(
+                "_"
+            )  # Better way to do this? Nested class, decorator?
         ]
         return tools
+
 
 def json_schema_type(python_type_name: str):
     """Converts standard python types to json schema types
@@ -135,6 +182,7 @@ def json_schema_type(python_type_name: str):
     }
 
     return python_to_json_schema_types.get(python_type_name, "string")
+
 
 def function_to_dict(input_function):  # noqa: C901
     """Using type hints and numpy-styled docstring,
@@ -212,10 +260,10 @@ def function_to_dict(input_function):  # noqa: C901
         # Check if the parameter has no default value (i.e., it's required)
         if param.default == param.empty:
             required_params.append(param_name)
-        
+
     # Create the dictionary
     result = {
-        "type": "function", 
+        "type": "function",
         "function": {
             "name": name,
             "description": description,
@@ -223,7 +271,7 @@ def function_to_dict(input_function):  # noqa: C901
                 "type": "object",
                 "properties": parameters,
             },
-        }
+        },
     }
 
     # Add "required" key if there are required parameters
