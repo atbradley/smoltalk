@@ -30,13 +30,18 @@ class Toolbox:
         if not system_prompt:
             logger.warning("No system prompt provided. Was this deliberate?")
 
+        print("initializing smoltalk.Toolbox")
+
         self.system_prompt = system_prompt
 
         self.tool_signatures = self._generate_tool_signatures()
+        print("tool signatures: ", self.tool_signatures)
 
     async def get_response(
         self, messages, auto_tool_call=True, fail_on_tool_error=None
     ):
+        print("responding")
+
         if fail_on_tool_error is None:
             fail_on_tool_error = self.fail_on_tool_error
 
@@ -105,8 +110,11 @@ class Toolbox:
                 except Exception as e:
                     logger.warning("Tool call failed with exception: %s" % str(e))
                     response = {"error": "Tool call failed with exception: %s" % str(e)}
+
+                    raise e
                     if fail_on_tool_error:
                         return response
+                
                 messages.append(
                     {
                         "role": "tool",
@@ -148,12 +156,11 @@ class Toolbox:
         Called by get_response().
         """
         logger.debug("Generating tool signatures.")
+        print(inspect.getmembers(self.tools, inspect.isfunction))
         tools = [
             function_to_dict(func)
-            for name, func in inspect.getmembers(self.tools, inspect.isfunction)
-            if not name.startswith(
-                "_"
-            )  # Better way to do this? Nested class, decorator?
+            for name, func in inspect.getmembers(self.tools, lambda x: inspect.isfunction(x) or inspect.ismethod(x))
+            if not name.startswith("_")
         ]
         return tools
 
