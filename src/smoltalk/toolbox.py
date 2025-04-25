@@ -110,8 +110,7 @@ class Toolbox:
                 except Exception as e:
                     logger.warning("Tool call failed with exception: %s" % str(e))
                     response = {"error": "Tool call failed with exception: %s" % str(e)}
-
-                    raise e
+                    
                     if fail_on_tool_error:
                         return response
                 
