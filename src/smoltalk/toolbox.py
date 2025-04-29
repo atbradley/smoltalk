@@ -1,10 +1,10 @@
 import inspect
 import json
 import logging
-from typing import Type, Union
-import os.path
-import httpx
 import time
+from typing import Type, Union
+
+import httpx
 
 logger = logging.getLogger(__name__)
 
@@ -24,8 +24,6 @@ class Toolbox:
         self.model = model
         self.api_key = api_key
         self.fail_on_tool_error = fail_on_tool_error
-
-        here = os.path.dirname(__file__)
 
         if not system_prompt:
             logger.warning("No system prompt provided. Was this deliberate?")
@@ -84,19 +82,34 @@ class Toolbox:
         logger.debug("Response from model: %s" % str(json.dumps(resp.json())))
         resp.raise_for_status()
         response = resp.json()
+
         if "function_call" in response["choices"][0]["message"]:
-            del(response["choices"][0]["message"]["function_call"]) #Mistral doesn't want this.
+            del(response["choices"][0]["message"]["function_call"])
         messages.append(response["choices"][0]["message"])
 
-        if auto_tool_call and response["choices"][0]["message"].get("tool_calls", []):
+        if auto_tool_call and "tool_calls" in response["choices"][0]["message"]:
             # TODO: this should be async and call the tools in parallel.
-            for tool_call in response["choices"][0]["message"].get("tool_calls"):
+            tool_calls = response["choices"][0]["message"]["tool_calls"]
+        elif auto_tool_call and "function" == response["choices"][0]["message"]["content"]["type"]:
+             #    "content": "{\"type\": \"function\", \"name\": \"pwrdesk_detail\", \"parameters\": {\"policy_number\": \"PRV0020128\"}}",
+            tool_calls = json.dumps([
+                {
+                    "function": {
+                        "name": response["choices"][0]["message"]["content"]["name"],
+                        "arguments": response["choices"][0]["message"]["content"]["parameters"]
+                            }
+                        ,
+                }   
+            ])
+        
+        if "tool_calls" in locals():
+            for tool_call in tool_calls:
                 logger.debug("tool call: %s" % str(response))
                 try:
                     response = await self._call_tool(tool_call)
                     logger.debug("tool response: %s" % str(response))
                     if fail_on_tool_error and (
-                        type(response) == dict and response.get("error")
+                        type(response) is dict and response.get("error")
                     ):
                         logger.warning(
                             "Tool call failed with error: %s" % response.get("error")
@@ -118,7 +131,7 @@ class Toolbox:
                         "name": tool_call["function"]["name"],
                     }
                 )
-                response = await self.get_response(messages)
+            response = await self.get_response(messages)
 
         return response
 
