@@ -17,7 +17,7 @@ async def create_chat_completion(request: Request, chatRequest:ChatCompletionReq
     tasks = [request.app.toolbox.get_response(chatRequest.messages) for _ in range(n)]
     msgs = await asyncio.gather(*tasks)
     outp = msgs[0]
-    outp.choices = [msg['choices'][0] for msg in msgs]
+    outp['choices'] = [msg['choices'][0] for msg in msgs]
     return outp
 
 # Optional but useful for compatibility
