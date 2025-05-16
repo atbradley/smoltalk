@@ -8,6 +8,7 @@ description = "A small, simple microframework for creating agentic AI applicatio
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "fastapi>=0.115.12",
     "httpx>=0.28.1",
     "numpydoc>=1.8.0",
 ]
