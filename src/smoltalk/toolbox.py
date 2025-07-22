@@ -6,9 +6,6 @@ from typing import Type, Union
 
 import httpx
 
-logger = logging.getLogger(__name__)
-
-
 class Toolbox:
     def __init__(
         self,
@@ -19,14 +16,15 @@ class Toolbox:
         system_prompt: str = None,
         fail_on_tool_error: bool = False,
     ):
+
+        self.logger = logging.getLogger(__name__)
         self.tools = tools
         self.root_url = root_url
         self.model = model
         self.api_key = api_key
         self.fail_on_tool_error = fail_on_tool_error
-
         if not system_prompt:
-            logger.warning("No system prompt provided. Was this deliberate?")
+            self.logger.warning("No system prompt provided. Was this deliberate?")
 
         self.system_prompt = system_prompt
 
@@ -49,7 +47,7 @@ class Toolbox:
 
         if self.system_prompt:
             messages.insert(0, {"role": "system", "content": self.system_prompt})
-        logger.debug("Getting a response from the model at %s" % (self.root_url,))
+        self.logger.debug("Getting a response from the model at %s" % (self.root_url,))
         request_body = {
             "model": self.model,
             "messages": messages,
@@ -59,7 +57,7 @@ class Toolbox:
             request_body["tools"] = self.tool_signatures
             request_body["tool_choice"] = "auto"
 
-        logger.debug("request_body: %s" % (json.dumps(request_body),))
+        self.logger.debug("request_body: %s" % (json.dumps(request_body),))
         start_time = time.perf_counter()
         async with httpx.AsyncClient() as client:
             resp = await client.post(
@@ -71,7 +69,7 @@ class Toolbox:
             )
         end_time = time.perf_counter()
         completed_time = time.ctime(end_time)
-        logger.info(
+        self.logger.info(
             "Received response from %s at %s (after %6f seconds)"
             % (
                 self.model,
@@ -79,45 +77,33 @@ class Toolbox:
                 end_time - start_time,
             )
         )
-        logger.debug("Response from model: %s" % str(json.dumps(resp.json())))
+        self.logger.debug("Response from model: %s" % str(json.dumps(resp.json())))
         resp.raise_for_status()
         response = resp.json()
 
-        if "function_call" in response["choices"][0]["message"]:
-            del(response["choices"][0]["message"]["function_call"])
         messages.append(response["choices"][0]["message"])
-
-        if auto_tool_call and "tool_calls" in response["choices"][0]["message"]:
-            # TODO: this should be async and call the tools in parallel.
+     
+        if auto_tool_call and "tool_calls" in response["choices"][0]["message"] and response["choices"][0]["message"]["tool_calls"] is not None:
             tool_calls = response["choices"][0]["message"]["tool_calls"]
-        elif auto_tool_call and "function" == response["choices"][0]["message"]["content"]["type"]:
-             #    "content": "{\"type\": \"function\", \"name\": \"pwrdesk_detail\", \"parameters\": {\"policy_number\": \"PRV0020128\"}}",
-            tool_calls = json.dumps([
-                {
-                    "function": {
-                        "name": response["choices"][0]["message"]["content"]["name"],
-                        "arguments": response["choices"][0]["message"]["content"]["parameters"]
-                            }
-                        ,
-                }   
-            ])
+            #del(response["choices"][0]["message"]["tool_calls"])
         
         if "tool_calls" in locals():
+            # TODO: this should be async and call the tools in parallel.
             for tool_call in tool_calls:
-                logger.debug("tool call: %s" % str(response))
+                self.logger.debug("tool call: %s" % str(response))
                 try:
                     response = await self._call_tool(tool_call)
-                    logger.debug("tool response: %s" % str(response))
+                    self.logger.debug("tool response: %s" % str(response))
                     if fail_on_tool_error and (
                         type(response) is dict and response.get("error")
                     ):
-                        logger.warning(
+                        self.logger.warning(
                             "Tool call failed with error: %s" % response.get("error")
                         )
                         return response
                 # TODO: provide a more specific exception for tools to throw.
                 except Exception as e:
-                    logger.warning("Tool call failed with exception: %s" % str(e))
+                    self.logger.warning("Tool call failed with exception: %s" % str(e))
                     response = {"error": "Tool call failed with exception: %s" % str(e)}
                     
                     if fail_on_tool_error:
@@ -131,16 +117,17 @@ class Toolbox:
                         "name": tool_call["function"]["name"],
                     }
                 )
+
             response = await self.get_response(messages)
 
         return response
 
     async def _call_tool(self, tool_call):
         start_time = time.perf_counter()
-        logger.debug("_call_tool: %s" % (tool_call,))
+        self.logger.debug("_call_tool: %s" % (tool_call,))
         tool_name = tool_call["function"]["name"]
         tool_args = json.loads(tool_call["function"]["arguments"])
-        logger.debug("Calling tool '%s' with parameters '%s'" % (tool_name, tool_args))
+        self.logger.debug("Calling tool '%s' with parameters '%s'" % (tool_name, tool_args))
         tool = getattr(self.tools, tool_name)
         if inspect.iscoroutinefunction(tool):
             outp = await tool(**tool_args)
@@ -148,7 +135,7 @@ class Toolbox:
             outp = tool(**tool_args)
         end_time = time.perf_counter()
         completed_time = time.ctime(end_time)
-        logger.info(
+        self.logger.info(
             "Tool %s returned at %s (after %6f seconds)"
             % (
                 self.model,
@@ -163,7 +150,7 @@ class Toolbox:
         Use litellm's function_to_dict to generate tool signatures for this toolbox.
         Called by get_response().
         """
-        logger.debug("Generating tool signatures.")
+        self.logger.debug("Generating tool signatures.")
         
         tools = [
             function_to_dict(func)
