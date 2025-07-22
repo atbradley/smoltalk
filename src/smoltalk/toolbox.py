@@ -2,9 +2,33 @@ import inspect
 import json
 import logging
 import time
-from typing import Type, Union
-
+from typing import Any, Dict, List, Optional, Type, Union
+from pydantic import BaseModel, Field
 import httpx
+import uuid
+
+class ChatMessage(BaseModel):
+    role: str
+    content: Optional[str] = None
+    tool_calls: Optional[List[Dict[str, Any]]] = None
+    tool_call_id: Optional[str] = None
+    name: Optional[str] = None
+
+class ChatCompletionRequest(BaseModel):
+    model: str
+    messages: List[ChatMessage]
+    temperature: Optional[float] = 1.0
+    max_tokens: Optional[int] = None
+    stream: Optional[bool] = False
+    n: Optional[int] = 1
+
+class ChatCompletionResponse(BaseModel):
+    id: str = Field(default_factory=lambda: f"chatcmpl-{uuid.uuid4()}")
+    object: str = "chat.completion"
+    created: int = Field(default_factory=lambda: int(time.time()))
+    model: str
+    choices: List[Dict[str, Any]]
+    usage: Dict[str, int]
 
 class Toolbox:
     def __init__(
@@ -27,18 +51,18 @@ class Toolbox:
             self.logger.warning("No system prompt provided. Was this deliberate?")
 
         self.system_prompt = system_prompt
-
+        
         self.tool_signatures = self._generate_tool_signatures()
 
     async def get_response(
-        self, messages, auto_tool_call=True, fail_on_tool_error=None
+        self, messages:list[ChatMessage], auto_tool_call=True, fail_on_tool_error=None
     ):
 
         if fail_on_tool_error is None:
             fail_on_tool_error = self.fail_on_tool_error
 
         for n in range(len(messages)):
-            if messages[n]["role"] in [
+            if messages[n].role in [
                 "system",
                 "developer",
             ]:  # OpenAI calls this role "developer" now.
@@ -46,14 +70,16 @@ class Toolbox:
                 break
 
         if self.system_prompt:
-            messages.insert(0, {"role": "system", "content": self.system_prompt})
+            messages.insert(0, ChatMessage(role="system", content=self.system_prompt))
         self.logger.debug("Getting a response from the model at %s" % (self.root_url,))
+        for m in messages:
+            self.logger.debug("message: %s" % (m.dict(exclude_unset=True),))
         request_body = {
             "model": self.model,
-            "messages": messages,
+            "messages": [m.dict(exclude_unset=True) for m in messages],
             "n": 1,
         }
-        if messages[-1]["role"] != "tool":
+        if messages[-1].role != "tool":
             request_body["tools"] = self.tool_signatures
             request_body["tool_choice"] = "auto"
 
@@ -80,14 +106,10 @@ class Toolbox:
         self.logger.debug("Response from model: %s" % str(json.dumps(resp.json())))
         resp.raise_for_status()
         response = resp.json()
+        messages.append(ChatMessage(role=response["choices"][0]["message"]["role"], content=response["choices"][0]["message"]["content"], tool_calls=response["choices"][0]["message"].get("tool_calls", None)))
 
-        messages.append(response["choices"][0]["message"])
-     
-        if auto_tool_call and "tool_calls" in response["choices"][0]["message"] and response["choices"][0]["message"]["tool_calls"] is not None:
-            tool_calls = response["choices"][0]["message"]["tool_calls"]
-            #del(response["choices"][0]["message"]["tool_calls"])
-        
-        if "tool_calls" in locals():
+        tool_calls = response["choices"][0]["message"].get("tool_calls")
+        if auto_tool_call and tool_calls is not None and len(tool_calls) > 0:
             # TODO: this should be async and call the tools in parallel.
             for tool_call in tool_calls:
                 self.logger.debug("tool call: %s" % str(response))
@@ -110,12 +132,7 @@ class Toolbox:
                         return response
                 
                 messages.append(
-                    {
-                        "role": "tool",
-                        "content": json.dumps(response),
-                        "tool_call_id": tool_call["id"],
-                        "name": tool_call["function"]["name"],
-                    }
+                    ChatMessage(role="tool", content=json.dumps(response), tool_call_id=tool_call["id"], name=tool_call["function"]["name"])
                 )
 
             response = await self.get_response(messages)
