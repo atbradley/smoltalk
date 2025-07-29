@@ -3,9 +3,10 @@ import json
 import logging
 import time
 from typing import Any, Dict, List, Optional, Type, Union
-from pydantic import BaseModel, Field
+
 import httpx
-import uuid
+from pydantic import BaseModel
+
 
 class ChatMessage(BaseModel):
     role: str
@@ -13,6 +14,7 @@ class ChatMessage(BaseModel):
     tool_calls: Optional[List[Dict[str, Any]]] = None
     tool_call_id: Optional[str] = None
     name: Optional[str] = None
+
 
 class ChatCompletionRequest(BaseModel):
     model: str
@@ -22,13 +24,6 @@ class ChatCompletionRequest(BaseModel):
     stream: Optional[bool] = False
     n: Optional[int] = 1
 
-class ChatCompletionResponse(BaseModel):
-    id: str = Field(default_factory=lambda: f"chatcmpl-{uuid.uuid4()}")
-    object: str = "chat.completion"
-    created: int = Field(default_factory=lambda: int(time.time()))
-    model: str
-    choices: List[Dict[str, Any]]
-    usage: Dict[str, int]
 
 class Toolbox:
     def __init__(
@@ -40,7 +35,6 @@ class Toolbox:
         system_prompt: str = None,
         fail_on_tool_error: bool = False,
     ):
-
         self.logger = logging.getLogger(__name__)
         self.tools = tools
         self.root_url = root_url
@@ -51,13 +45,12 @@ class Toolbox:
             self.logger.warning("No system prompt provided. Was this deliberate?")
 
         self.system_prompt = system_prompt
-        
+
         self.tool_signatures = self._generate_tool_signatures()
 
     async def get_response(
-        self, messages:list[ChatMessage], auto_tool_call=True, fail_on_tool_error=None
+        self, messages: list[ChatMessage], auto_tool_call=True, fail_on_tool_error=None
     ):
-
         if fail_on_tool_error is None:
             fail_on_tool_error = self.fail_on_tool_error
 
@@ -106,7 +99,13 @@ class Toolbox:
         self.logger.debug("Response from model: %s" % str(json.dumps(resp.json())))
         resp.raise_for_status()
         response = resp.json()
-        messages.append(ChatMessage(role=response["choices"][0]["message"]["role"], content=response["choices"][0]["message"]["content"], tool_calls=response["choices"][0]["message"].get("tool_calls", None)))
+        messages.append(
+            ChatMessage(
+                role=response["choices"][0]["message"]["role"],
+                content=response["choices"][0]["message"]["content"],
+                tool_calls=response["choices"][0]["message"].get("tool_calls", None),
+            )
+        )
 
         tool_calls = response["choices"][0]["message"].get("tool_calls")
         if auto_tool_call and tool_calls is not None and len(tool_calls) > 0:
@@ -127,12 +126,17 @@ class Toolbox:
                 except Exception as e:
                     self.logger.warning("Tool call failed with exception: %s" % str(e))
                     response = {"error": "Tool call failed with exception: %s" % str(e)}
-                    
+
                     if fail_on_tool_error:
                         return response
-                
+
                 messages.append(
-                    ChatMessage(role="tool", content=json.dumps(response), tool_call_id=tool_call["id"], name=tool_call["function"]["name"])
+                    ChatMessage(
+                        role="tool",
+                        content=json.dumps(response),
+                        tool_call_id=tool_call["id"],
+                        name=tool_call["function"]["name"],
+                    )
                 )
 
             response = await self.get_response(messages)
@@ -144,7 +148,9 @@ class Toolbox:
         self.logger.debug("_call_tool: %s" % (tool_call,))
         tool_name = tool_call["function"]["name"]
         tool_args = json.loads(tool_call["function"]["arguments"])
-        self.logger.debug("Calling tool '%s' with parameters '%s'" % (tool_name, tool_args))
+        self.logger.debug(
+            "Calling tool '%s' with parameters '%s'" % (tool_name, tool_args)
+        )
         tool = getattr(self.tools, tool_name)
         if inspect.iscoroutinefunction(tool):
             outp = await tool(**tool_args)
@@ -168,10 +174,12 @@ class Toolbox:
         Called by get_response().
         """
         self.logger.debug("Generating tool signatures.")
-        
+
         tools = [
             function_to_dict(func)
-            for name, func in inspect.getmembers(self.tools, lambda x: inspect.isfunction(x) or inspect.ismethod(x))
+            for name, func in inspect.getmembers(
+                self.tools, lambda x: inspect.isfunction(x) or inspect.ismethod(x)
+            )
             if not name.startswith("_")
         ]
         return tools
