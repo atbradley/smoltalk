@@ -3,17 +3,23 @@ import os
 import time
 from typing import List
 
+
 from fastapi import APIRouter, HTTPException, Request
 
 from .toolbox import ChatCompletionRequest, ChatMessage
 
 OpenAIRouter = APIRouter()
 starttime = int(time.time())
-
+@app.get("/api/forward-sse")
+async def forward_sse():
+    return EventSourceResponse(stream_from_third_party_sse())
 
 @OpenAIRouter.post("/v1/chat/completions")
 async def create_chat_completion(request: Request, chatRequest: ChatCompletionRequest):
     n = chatRequest.n
+
+    if chatRequest.stream:
+        return stream_completion(request, chat
 
     tasks = [request.app.toolbox.get_response(chatRequest.messages) for _ in range(n)]
     msgs = await asyncio.gather(*tasks)

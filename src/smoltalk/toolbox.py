@@ -48,6 +48,38 @@ class Toolbox:
 
         self.tool_signatures = self._generate_tool_signatures()
 
+    async def get_response_stream(self, request_body:dict, auto_tool_call=True, fail_on_tool_error=None):
+        
+        async with httpx.AsyncClient() as client:
+            async with client.stream("POST", url, headers={"Authorization": f"Bearer {api_key}"}, json=request_body) as response:
+                async for chunk in response.aiter_text():
+                    if chunk:
+                        # Parse the JSON chunk
+                        data = json.loads(chunk)
+                        # Check if there's a tool call
+                        if "tool_calls" in data:
+                            for tool_call in data['tool_calls']:
+                                self.logger.debug("tool call: %s" % str(response))
+                                try:
+                                    response = await self._call_tool(tool_call)
+                                    self.logger.debug("tool response: %s" % str(response))
+                                    if fail_on_tool_error and (
+                                        type(response) is dict and response.get("error")
+                                    ):
+                                        self.logger.warning(
+                                            "Tool call failed with error: %s" % response.get("error")
+                                        )
+                                        return response
+                                # TODO: provide a more specific exception for tools to throw.
+                                except Exception as e:
+                                    self.logger.warning("Tool call failed with exception: %s" % str(e))
+                                    response = {"error": "Tool call failed with exception: %s" % str(e)}
+
+                        else:
+                            # Handle regular content
+                            print(data["choices"][0]["delta"]["content"], end='')
+
+
     async def get_response(
         self, messages: list[ChatMessage], auto_tool_call=True, fail_on_tool_error=None
     ):
