@@ -6,7 +6,7 @@ from typing import List
 
 from fastapi import APIRouter, HTTPException, Request
 
-from .toolbox import ChatCompletionRequest, ChatMessage
+from smoltalk.models import ChatCompletionRequest, ChatMessage
 
 OpenAIRouter = APIRouter()
 starttime = int(time.time())
