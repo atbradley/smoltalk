@@ -12,5 +12,6 @@ dependencies = [
     "httpx>=0.28.1",
     "httpx-sse>=0.4.1",
     "numpydoc>=1.8.0",
+    "openai>=1.102.0",
     "orjson>=3.11.1",
 ]

@@ -1,10 +1,12 @@
 import asyncio
+import json
 import os
 import time
 from typing import List
 
 
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import StreamingResponse
 
 from smoltalk.models import ChatCompletionRequest, ChatMessage
 
@@ -16,9 +18,42 @@ async def forward_sse():
 
 @OpenAIRouter.post("/v1/chat/completions")
 async def create_chat_completion(request: Request, chatRequest: ChatCompletionRequest):
-    n = chatRequest.n
+    n = chatRequest.n or 1
 
+    # Handle streaming requests
+    if chatRequest.stream:
+        async def stream_generator():
+            """Generate SSE-formatted streaming responses"""
+            try:
+                # get_response_stream is a synchronous generator, so we iterate normally
+                for chunk in request.app.toolbox.get_response_stream(chatRequest.messages):
+                    # Format as SSE data
+                    chunk_json = json.dumps(chunk)
+                    yield f"data: {chunk_json}\n\n"
+                
+                # Send the final [DONE] message
+                yield "data: [DONE]\n\n"
+            except Exception as e:
+                # Send error in SSE format
+                error_chunk = {
+                    "error": {
+                        "message": str(e),
+                        "type": "server_error"
+                    }
+                }
+                yield f"data: {json.dumps(error_chunk)}\n\n"
+        
+        return StreamingResponse(
+            stream_generator(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no"  # Disable nginx buffering
+            }
+        )
 
+    # Handle non-streaming requests (original behavior)
     tasks = [request.app.toolbox.get_response(chatRequest.messages) for _ in range(n)]
     msgs = await asyncio.gather(*tasks)
     outp = msgs[0]

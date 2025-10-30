@@ -4,29 +4,26 @@ import logging
 import time
 from typing import Any, Dict, List, Optional, Type, Union
 
-import httpx
-from pydantic import BaseModel
+from openai import OpenAI
 
 from smoltalk.models import ChatMessage
 
 
 class Toolbox:
-    #TODO: get an openai.OpenAI object on creation. 
     def __init__(
         self,
         tools: Union[Type[object], object],
-        root_url: str,
+        client: OpenAI,
         model: str,
-        api_key: str = "no-key-needed",
-        system_prompt: str = None,
+        system_prompt: str|None = None,
         fail_on_tool_error: bool = False,
     ):
         self.logger = logging.getLogger(__name__)
         self.tools = tools
-        self.root_url = root_url
+        self.client = client
         self.model = model
-        self.api_key = api_key
         self.fail_on_tool_error = fail_on_tool_error
+
         if not system_prompt:
             self.logger.warning("No system prompt provided. Was this deliberate?")
 
@@ -34,40 +31,80 @@ class Toolbox:
 
         self.tool_signatures = self._generate_tool_signatures()
 
-    async def get_response_stream(self, request_body:dict, auto_tool_call=True, fail_on_tool_error=None):
+    def get_response_stream(
+        self, messages: List[ChatMessage], auto_tool_call=True, fail_on_tool_error=None
+    ):
+        """
+        Stream responses from OpenAI API. Yields chunks in the OpenAI streaming format.
+        Note: This is a synchronous generator even though it's used in async contexts.
+        The OpenAI client's streaming is synchronous, so this matches that behavior.
         
-        async with httpx.AsyncClient() as client:
-            async with client.stream("POST", url, headers={"Authorization": f"Bearer {api_key}"}, json=request_body) as response:
-                async for chunk in response.aiter_text():
-                    if chunk:
-                        # Parse the JSON chunk
-                        data = json.loads(chunk)
-                        # Check if there's a tool call
-                        if "tool_calls" in data:
-                            for tool_call in data['tool_calls']:
-                                self.logger.debug("tool call: %s" % str(response))
-                                try:
-                                    response = await self._call_tool(tool_call)
-                                    self.logger.debug("tool response: %s" % str(response))
-                                    if fail_on_tool_error and (
-                                        type(response) is dict and response.get("error")
-                                    ):
-                                        self.logger.warning(
-                                            "Tool call failed with error: %s" % response.get("error")
-                                        )
-                                        return response
-                                # TODO: provide a more specific exception for tools to throw.
-                                except Exception as e:
-                                    self.logger.warning("Tool call failed with exception: %s" % str(e))
-                                    response = {"error": "Tool call failed with exception: %s" % str(e)}
+        Parameters
+        ----------
+        messages : List[ChatMessage]
+            The conversation history
+        auto_tool_call : bool
+            Whether to automatically execute tool calls (not supported in streaming mode)
+        fail_on_tool_error : bool
+            Whether to fail on tool errors
+            
+        Yields
+        ------
+        dict
+            Response chunks in OpenAI format
+        """
+        if fail_on_tool_error is None:
+            fail_on_tool_error = self.fail_on_tool_error
 
-                        else:
-                            # Handle regular content
-                            print(data["choices"][0]["delta"]["content"], end='')
+        # Remove any existing system messages
+        for n in range(len(messages)):
+            if messages[n].role in ["system", "developer"]:
+                messages.pop(n)
+                break
+
+        # Add system prompt if configured
+        if self.system_prompt:
+            messages.insert(0, ChatMessage(role="system", content=self.system_prompt))
+
+        self.logger.debug("Getting a streaming response from the model")
+        for m in messages:
+            self.logger.debug("message: %s" % (m.dict(exclude_unset=True),))
+
+        # Create streaming request
+        start_time = time.perf_counter()
+        end_time = start_time  # Initialize end_time
+        
+        stream = self.client.chat.completions.create(
+            model=self.model,
+            messages=[m.dict(exclude_unset=True) for m in messages],
+            n=1,
+            tools=self.tool_signatures if messages[-1].role != "tool" else None,
+            tool_choice="auto" if messages[-1].role != "tool" else None,
+            stream=True,
+        )
+        
+        # Process streaming chunks
+        for chunk in stream:
+            end_time = time.perf_counter()
+            self.logger.debug("Received chunk: %s" % str(chunk.dict()))
+            
+            # Convert to dict and yield
+            yield chunk.dict()
+        
+        completed_time = time.ctime(end_time)
+        self.logger.info(
+            "Completed streaming response from %s at %s (after %6f seconds)"
+            % (
+                self.model,
+                completed_time,
+                end_time - start_time,
+            )
+        )
+
 
 
     async def get_response(
-        self, messages: list[ChatMessage], auto_tool_call=True, fail_on_tool_error=None
+        self, messages: List[ChatMessage], auto_tool_call=True, fail_on_tool_error=None
     ):
         if fail_on_tool_error is None:
             fail_on_tool_error = self.fail_on_tool_error
@@ -96,14 +133,14 @@ class Toolbox:
 
         self.logger.debug("request_body: %s" % (json.dumps(request_body),))
         start_time = time.perf_counter()
-        async with httpx.AsyncClient() as client:
-            resp = await client.post(
-                f"{self.root_url}chat/completions",
-                headers={"Authorization": f"Bearer {self.api_key}"},
-                json=request_body,
-                follow_redirects=True,
-                timeout=45,
-            )
+
+        resp = self.client.chat.completions.create(
+            model=self.model,
+            messages=[m.dict(exclude_unset=True) for m in messages],
+            n=1,
+            tools=self.tool_signatures if messages[-1].role != "tool" else None,
+            tool_choice="auto" if messages[-1].role != "tool" else None,
+        )
         end_time = time.perf_counter()
         completed_time = time.ctime(end_time)
         self.logger.info(
@@ -114,18 +151,18 @@ class Toolbox:
                 end_time - start_time,
             )
         )
-        self.logger.debug("Response from model: %s" % str(json.dumps(resp.json())))
-        resp.raise_for_status()
-        response = resp.json()
+        self.logger.debug("Response from model: %s" % str(json.dumps(resp.dict())))
+        
+        message = resp.choices[0].message
         messages.append(
             ChatMessage(
-                role=response["choices"][0]["message"]["role"],
-                content=response["choices"][0]["message"]["content"],
-                tool_calls=response["choices"][0]["message"].get("tool_calls", None),
+                role=message.role,
+                content=message.content,
+                tool_calls=getattr(message, "tool_calls", None),
             )
         )
 
-        tool_calls = response["choices"][0]["message"].get("tool_calls")
+        tool_calls = message.tool_calls
         if auto_tool_call and tool_calls is not None and len(tool_calls) > 0:
             # TODO: this should be async and call the tools in parallel.
             for tool_call in tool_calls:
