@@ -119,7 +119,7 @@ class Toolbox:
 
         if self.system_prompt:
             messages.insert(0, ChatMessage(role="system", content=self.system_prompt))
-        self.logger.debug("Getting a response from the model at %s" % (self.root_url,))
+        self.logger.debug("Getting a response from the model %s" % (self.model,))
         for m in messages:
             self.logger.debug("message: %s" % (m.dict(exclude_unset=True),))
         request_body = {
@@ -152,6 +152,8 @@ class Toolbox:
             )
         )
         self.logger.debug("Response from model: %s" % str(json.dumps(resp.dict())))
+        
+        response = resp.to_dict()
         
         message = resp.choices[0].message
         messages.append(
@@ -195,7 +197,7 @@ class Toolbox:
                 )
 
             response = await self.get_response(messages)
-
+        
         return response
 
     async def _call_tool(self, tool_call):
@@ -279,7 +281,7 @@ def function_to_dict(input_function):  # noqa: C901
 
     Returns
     -------
-    dictionnary
+    dictionary
         A dictionnary to add to the list passed to `functions` parameter of `litellm.completion`
     """
     # Get function name and docstring
